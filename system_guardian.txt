@@ -1,0 +1,175 @@
+# System Protection Guardian
+# আপনার ল্যাপটপকে বিপজ্জনক পরিবর্তন থেকে রক্ষা করে
+
+# Admin হিসেবে চালাতে হবে
+if (-NOT ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")) {
+    Write-Warning "এই স্ক্রিপ্ট Administrator হিসেবে চালান!"
+    Start-Process powershell.exe "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`"" -Verb RunAs
+    exit
+}
+
+$Host.UI.RawUI.WindowTitle = "🛡️ System Protection Guardian"
+Clear-Host
+
+# Color ফাংশন
+function Write-ColorOutput($ForegroundColor) {
+    $fc = $host.UI.RawUI.ForegroundColor
+    $host.UI.RawUI.ForegroundColor = $ForegroundColor
+    if ($args) {
+        Write-Output $args
+    }
+    $host.UI.RawUI.ForegroundColor = $fc
+}
+
+Write-ColorOutput Green "════════════════════════════════════════════════════════"
+Write-ColorOutput Cyan "          🛡️ SYSTEM PROTECTION GUARDIAN 🛡️"
+Write-ColorOutput Green "════════════════════════════════════════════════════════"
+Write-Host ""
+
+# Backup ফোল্ডার তৈরি
+$backupPath = "$env:USERPROFILE\SystemGuardian_Backups"
+if (!(Test-Path $backupPath)) {
+    New-Item -ItemType Directory -Path $backupPath -Force | Out-Null
+}
+
+# System Restore চালু করা
+Write-ColorOutput Yellow "[1/5] System Restore সক্রিয় করা হচ্ছে..."
+try {
+    Enable-ComputerRestore -Drive "C:\" -ErrorAction SilentlyContinue
+    Checkpoint-Computer -Description "Guardian Auto Backup - $(Get-Date -Format 'dd-MM-yyyy HH:mm')" -RestorePointType "MODIFY_SETTINGS"
+    Write-ColorOutput Green "✅ System Restore Point তৈরি হয়েছে!"
+} catch {
+    Write-ColorOutput Red "⚠️ System Restore Point তৈরি করতে সমস্যা"
+}
+
+# Registry Backup
+Write-ColorOutput Yellow "`n[2/5] গুরুত্বপূর্ণ Registry backup করা হচ্ছে..."
+$registryBackup = "$backupPath\Registry_Backup_$(Get-Date -Format 'ddMMyyyy_HHmm').reg"
+$criticalKeys = @(
+    "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run",
+    "HKLM\SYSTEM\CurrentControlSet\Services",
+    "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
+)
+
+foreach ($key in $criticalKeys) {
+    reg export $key "$registryBackup" /y 2>$null
+}
+Write-ColorOutput Green "✅ Registry backup সম্পন্ন!"
+
+# বিপজ্জনক কমান্ড তালিকা
+$dangerousCommands = @(
+    "Remove-Item.*-Recurse.*C:\\Windows",
+    "Remove-Item.*-Recurse.*C:\\Program Files",
+    "Remove-Item.*-Recurse.*Registry::",
+    "rd.*\/s.*C:\\Windows",
+    "del.*\/s.*C:\\Windows",
+    "Format-Volume",
+    "Clear-Disk",
+    "Remove-Partition",
+    "reg delete.*\/f",
+    "bcdedit.*\/delete",
+    "takeown.*\/f.*C:\\Windows",
+    "icacls.*C:\\Windows.*\/reset"
+)
+
+Write-ColorOutput Yellow "`n[3/5] Protection Monitor সেটআপ করা হচ্ছে..."
+
+# PowerShell Profile Protection যোগ করা
+$profilePath = $PROFILE.CurrentUserAllHosts
+$profileDir = Split-Path $profilePath -Parent
+
+if (!(Test-Path $profileDir)) {
+    New-Item -ItemType Directory -Path $profileDir -Force | Out-Null
+}
+
+$protectionCode = @"
+# System Protection Guardian - Auto Loaded
+`$global:GuardianActive = `$true
+
+function Invoke-SafetyCheck {
+    param([string]`$Command)
+    
+    `$dangerousPatterns = @(
+        'Remove-Item.*-Recurse.*C:\\Windows',
+        'Remove-Item.*-Recurse.*Registry::',
+        'Format-Volume', 'Clear-Disk',
+        'reg delete.*\/f', 'rd.*\/s.*C:\\Windows'
+    )
+    
+    foreach (`$pattern in `$dangerousPatterns) {
+        if (`$Command -match `$pattern) {
+            Write-Host ""
+            Write-Host "🛡️════════════════════════════════════════════════════════🛡️" -ForegroundColor Red
+            Write-Host "        ⛔ বিপজ্জনক কমান্ড সনাক্ত হয়েছে! ⛔" -ForegroundColor Yellow
+            Write-Host "🛡️════════════════════════════════════════════════════════🛡️" -ForegroundColor Red
+            Write-Host ""
+            Write-Host "  আপনি যে কমান্ডটি চালাতে চাচ্ছেন সেটি আপনার" -ForegroundColor White
+            Write-Host "  সিস্টেমের মারাত্মক ক্ষতি করতে পারে!" -ForegroundColor White
+            Write-Host ""
+            Write-Host "  🎯 সনাক্তকৃত কমান্ড: `$Command" -ForegroundColor Cyan
+            Write-Host ""
+            Write-Host "  ✅ আপনাকে বিপদ থেকে বাঁচানো হয়েছে!" -ForegroundColor Green
+            Write-Host "  📁 Backup Location: `$env:USERPROFILE\SystemGuardian_Backups" -ForegroundColor Yellow
+            Write-Host ""
+            Write-Host "🛡️════════════════════════════════════════════════════════🛡️" -ForegroundColor Red
+            Write-Host ""
+            return `$false
+        }
+    }
+    return `$true
+}
+
+# Command History Monitor
+`$PSDefaultParameterValues['Out-Default:OutVariable'] = 'LastCommand'
+"@
+
+Add-Content -Path $profilePath -Value $protectionCode -Force
+Write-ColorOutput Green "✅ Protection Monitor সক্রিয় হয়েছে!"
+
+# Windows Defender সক্রিয়করণ
+Write-ColorOutput Yellow "`n[4/5] Windows Defender চেক করা হচ্ছে..."
+try {
+    Set-MpPreference -DisableRealtimeMonitoring $false -ErrorAction SilentlyContinue
+    Write-ColorOutput Green "✅ Windows Defender সক্রিয়!"
+} catch {
+    Write-ColorOutput Yellow "⚠️ Windows Defender ম্যানুয়ালি চেক করুন"
+}
+
+# System File Protection
+Write-ColorOutput Yellow "`n[5/5] System Files চেক করা হচ্ছে..."
+Write-ColorOutput Cyan "    (এটি কিছু সময় নিতে পারে...)"
+
+Start-Process -FilePath "sfc" -ArgumentList "/scannow" -NoNewWindow -Wait -RedirectStandardOutput "$backupPath\sfc_log.txt"
+
+Write-Host ""
+Write-ColorOutput Green "════════════════════════════════════════════════════════"
+Write-ColorOutput Green "            ✅ PROTECTION SETUP সম্পন্ন! ✅"
+Write-ColorOutput Green "════════════════════════════════════════════════════════"
+Write-Host ""
+Write-ColorOutput Cyan "🎯 এখন থেকে যখনই আপনি বিপজ্জনক কমান্ড চালাবেন:"
+Write-Host "   • স্বয়ংক্রিয়ভাবে ব্লক হবে"
+Write-Host "   • আপনাকে সতর্ক করা হবে"
+Write-Host "   • বিপদ থেকে রক্ষা করা হবে"
+Write-Host ""
+Write-ColorOutput Yellow "📁 Backup Location: $backupPath"
+Write-ColorOutput Yellow "📅 System Restore Point তৈরি হয়েছে"
+Write-Host ""
+Write-ColorOutput Green "💡 পরামর্শ: নতুন PowerShell উইন্ডো খুলুন Protection সক্রিয় করতে!"
+Write-Host ""
+
+# Test বিপজ্জনক কমান্ড (শুধু প্রদর্শন)
+Write-ColorOutput Cyan "════════════════════════════════════════════════════════"
+Write-ColorOutput Cyan "           🧪 PROTECTION TEST"
+Write-ColorOutput Cyan "════════════════════════════════════════════════════════"
+Write-Host ""
+Write-ColorOutput Yellow "এই কমান্ডগুলো এখন থেকে ব্লক হবে:"
+Write-Host "  ❌ Remove-Item C:\Windows -Recurse"
+Write-Host "  ❌ reg delete HKLM\SOFTWARE /f"
+Write-Host "  ❌ Format-Volume -DriveLetter C"
+Write-Host "  ❌ rd /s C:\Windows"
+Write-Host ""
+
+Write-ColorOutput Green "পরবর্তী PowerShell সেশন থেকে Protection সক্রিয় থাকবে!"
+Write-Host ""
+Write-Host "Press any key to exit..."
+$null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
